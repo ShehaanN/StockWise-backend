@@ -1,0 +1,57 @@
+import { createServer } from "node:http";
+import * as productController from "./productController.js";
+import url from "node:url";
+import { log } from "node:console";
+
+const PORT = process.env.PORT || 3000;
+
+const server = createServer((req, res) => {
+  // CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // Handle preflight OPTIONS request for CORS
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  const parsedUrl = url.parse(req.url, true);
+  const { pathname } = parsedUrl;
+  const method = req.method;
+
+  // Simple router
+
+  if (pathname === "/products" && method === "GET") {
+    productController.getAllProducts((err, products) => {
+      if (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Error fetching products" }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(products));
+      }
+    });
+  } else if (pathname.match(/^\/products\/(\d+)$/) && method === "GET") {
+    const id = pathname.split("/")[2];
+    productController.getProductById(id, (err, product) => {
+      if (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Error fetching product" }));
+      } else if (!product) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Product not found" }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(product));
+      }
+    });
+  }
+}).listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
