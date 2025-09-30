@@ -28,13 +28,20 @@ const server = createServer((req, res) => {
   // Simple router
 
   if (pathname === "/products" && method === "GET") {
+    const { search } = parsedUrl.query;
     productController.getAllProducts((err, products) => {
       if (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ message: "Error fetching products" }));
       } else {
+        let filteredProducts = products;
+        if (search) {
+          filteredProducts = products.filter((product) =>
+            product.name.toLowerCase().includes(search.toLowerCase())
+          );
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(products));
+        res.end(JSON.stringify(filteredProducts));
       }
     });
   } else if (pathname.match(/^\/products\/(\d+)$/) && method === "GET") {
