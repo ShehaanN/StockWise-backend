@@ -1,11 +1,33 @@
 import { createServer } from "node:http";
 import * as productController from "./productController.js";
+import * as userController from "./userController.js";
 import url from "node:url";
-import { log } from "node:console";
-
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import "dotenv/config";
 const PORT = process.env.PORT || 3000;
 
-const server = createServer((req, res) => {
+// authentication for authorized users
+const verifyToken = (req, res) => {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ message: "No token provided" }));
+    return null;
+  }
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    return payload;
+  } catch (error) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ message: "Invalid token" }));
+    return null;
+  }
+};
+
+const server = createServer(async (req, res) => {
   // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
@@ -28,6 +50,10 @@ const server = createServer((req, res) => {
   // Simple router
 
   if (pathname === "/products" && method === "GET") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
     const { search } = parsedUrl.query;
     productController.getAllProducts((err, products) => {
       if (err) {
@@ -45,6 +71,10 @@ const server = createServer((req, res) => {
       }
     });
   } else if (pathname.match(/^\/products\/(\d+)$/) && method === "GET") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
     const id = pathname.split("/")[2];
     productController.getProductById(id, (err, product) => {
       if (err) {
@@ -58,7 +88,25 @@ const server = createServer((req, res) => {
         res.end(JSON.stringify(product));
       }
     });
+  } else if (
+    pathname.match(/^\/products\/(\d+)\/stock-history$/) &&
+    method === "GET"
+  ) {
+    const productId = pathname.split("/")[2];
+    productController.getProductHistoryById(productId, (err, history) => {
+      if (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Error fetching product history" }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(history));
+      }
+    });
   } else if (pathname === "/products" && method === "POST") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
     let body = "";
     req.on("data", (chunk) => {
       body += chunk.toString();
@@ -76,6 +124,10 @@ const server = createServer((req, res) => {
       });
     });
   } else if (pathname.match(/^\/products\/(\d+)$/) && method === "PUT") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
     const id = pathname.split("/")[2];
     let body = "";
     req.on("data", (chunk) => {
@@ -94,6 +146,10 @@ const server = createServer((req, res) => {
       });
     });
   } else if (pathname.match(/^\/products\/(\d+)$/) && method === "DELETE") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
     const id = pathname.split("/")[2];
     productController.deleteProduct(id, (err, result) => {
       if (err) {
@@ -104,6 +160,90 @@ const server = createServer((req, res) => {
         res.end(JSON.stringify({ message: `Product ${id} deleted` }));
       }
     });
+  } else if (pathname === "/register" && method === "POST") {
+    try {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+      req.on("end", async () => {
+        const { email, password } = JSON.parse(body);
+        if (!email || !password) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(
+            JSON.stringify({ message: "Email and password are required" })
+          );
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        userController.createUser(
+          { email, password: hashedPassword },
+          (err, result) => {
+            if (err) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ message: "Error creating user" }));
+            } else {
+              res.writeHead(201, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  message: "Registration successful",
+                  data: {
+                    Id: result.insertId,
+                    email: email,
+                  },
+                })
+              );
+            }
+          }
+        );
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Server error during registration" }));
+    }
+  } else if (pathname === "/login" && method === "POST") {
+    try {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+      req.on("end", async () => {
+        const { email, password } = JSON.parse(body);
+        if (!email || !password) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(
+            JSON.stringify({ message: "Email and password are required" })
+          );
+        }
+        userController.getUserByEmail(email, async (err, user) => {
+          if (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ message: "Error fetching user" }));
+          }
+          if (!user) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ message: "Invalid credentials" }));
+          }
+          const isMatch = await bcrypt.compare(password, user.password);
+          if (!isMatch) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ message: "Invalid credentials" }));
+          }
+          // Generate JWT
+          const token = jwt.sign(
+            { id: user.id, email: user.email },
+            process.env.JWT_SECRET,
+            { expiresIn: "1h" }
+          );
+
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ message: "Login successful", token }));
+        });
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Server error during login" }));
+    }
   } else {
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ message: "Route not found" }));

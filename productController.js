@@ -16,6 +16,16 @@ export const getProductById = (id, callback) => {
   });
 };
 
+// Get a single product movement history
+export const getProductHistoryById = (id, callback) => {
+  const sql =
+    "SELECT * FROM stock_movements WHERE product_id = ? ORDER BY created_at DESC";
+
+  db.query(sql, [id], (err, result) => {
+    callback(err, result);
+  });
+};
+
 // CREATE a new product
 export const createProduct = (productData, callback) => {
   const sql = "INSERT INTO products SET ?";
