@@ -26,6 +26,84 @@ export const getProductHistoryById = (id, callback) => {
   });
 };
 
+// begin a transaction to create a stock movement and update product stock
+export const createStockMovement = (
+  { product_id, quantity_change, reason },
+  callback
+) => {
+  db.beginTransaction((err) => {
+    if (err) {
+      return callback(err);
+    }
+    // 1. Insert into stock_movements
+    const movementSql = "INSERT INTO stock_movements SET ?";
+    const movementData = { product_id, quantity_change, reason };
+    db.query(movementSql, movementData, (err, result) => {
+      if (err) {
+        return db.rollback(() => {
+          callback(err);
+        });
+      }
+      const movementId = result.insertId;
+      // 2. Update the stock in the products table
+
+      const productSql = "UPDATE products SET stock = stock + ? WHERE id = ?";
+      db.query(productSql, [quantity_change, product_id], (err, result) => {
+        if (err) {
+          return db.rollback(() => {
+            callback(err);
+          });
+        }
+
+        db.commit((err) => {
+          if (err) {
+            return db.rollback(() => {
+              callback(err);
+            });
+          }
+
+          callback(null, { id: movementId, ...movementData });
+        });
+      });
+    });
+  });
+};
+
+// GET stats
+
+export const getStats = (callback) => {
+  const queries = {
+    totalProducts: "SELECT COUNT(*) as count FROM products",
+    totalValue: "SELECT SUM(price * stock) as value FROM products",
+    lowStockItems: "SELECT COUNT(*) as count FROM products WHERE stock < 10", // threshold = 10
+  };
+
+  // Run queries in parallel
+  Promise.all([
+    new Promise((resolve, reject) =>
+      db.query(queries.totalProducts, (err, result) =>
+        err ? reject(err) : resolve(result[0].count)
+      )
+    ),
+    new Promise((resolve, reject) =>
+      db.query(queries.totalValue, (err, result) =>
+        err ? reject(err) : resolve(result[0].value)
+      )
+    ),
+    new Promise((resolve, reject) =>
+      db.query(queries.lowStockItems, (err, result) =>
+        err ? reject(err) : resolve(result[0].count)
+      )
+    ),
+  ])
+    .then(([totalProducts, totalValue, lowStockItems]) => {
+      callback(null, { totalProducts, totalValue, lowStockItems });
+    })
+    .catch((err) => {
+      callback(err, null);
+    });
+};
+
 // CREATE a new product
 export const createProduct = (productData, callback) => {
   const sql = "INSERT INTO products SET ?";
