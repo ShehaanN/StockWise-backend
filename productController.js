@@ -26,9 +26,24 @@ export const getProductHistoryById = (id, callback) => {
   });
 };
 
+export const getProductsMovements = (callback) => {
+  const sql = `
+    SELECT 
+      sm.*,
+      p.name as product_name,
+      p.price as product_price
+    FROM stock_movements sm 
+    LEFT JOIN products p ON sm.product_id = p.id 
+    ORDER BY sm.created_at DESC
+  `;
+  db.query(sql, (err, result) => {
+    callback(err, result);
+  });
+};
+
 // begin a transaction to create a stock movement and update product stock
 export const createStockMovement = (
-  { product_id, quantity_change, reason },
+  { product_id, quantity_change, reason, type, balance },
   callback
 ) => {
   db.beginTransaction((err) => {
@@ -37,7 +52,7 @@ export const createStockMovement = (
     }
     // 1. Insert into stock_movements
     const movementSql = "INSERT INTO stock_movements SET ?";
-    const movementData = { product_id, quantity_change, reason };
+    const movementData = { product_id, quantity_change, reason, type, balance };
     db.query(movementSql, movementData, (err, result) => {
       if (err) {
         return db.rollback(() => {

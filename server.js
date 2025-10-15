@@ -9,13 +9,16 @@ const PORT = process.env.PORT || 3000;
 
 // authentication for authorized users
 const verifyToken = (req, res) => {
-  const authHeader = req.headers["authorization"];
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ message: "No token provided" }));
-    return null;
-  }
-  const token = authHeader.split(" ")[1];
+  const authHeader =
+    req.headers["Authorization"] || req.headers["authorization"];
+  // if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  //   res.writeHead(401, { "Content-Type": "application/json" });
+  //   res.end(JSON.stringify({ message: "No token provided" }));
+  //   return null;
+  // }
+  // const token = authHeader.split(" ")[1];
+
+  const token = authHeader;
 
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
@@ -34,7 +37,12 @@ const server = createServer(async (req, res) => {
     "Access-Control-Allow-Methods",
     "GET, POST, PUT, DELETE, OPTIONS"
   );
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "*"
+    // "Content-Type",
+    // "Authorization"
+  );
 
   // Handle preflight OPTIONS request for CORS
   if (req.method === "OPTIONS") {
@@ -70,6 +78,20 @@ const server = createServer(async (req, res) => {
         res.end(JSON.stringify(filteredProducts));
       }
     });
+  } else if (pathname === "/products/movements" && method === "GET") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    productController.getProductsMovements((err, result) => {
+      if (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Error fetching movement history" }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      }
+    });
   } else if (pathname.match(/^\/products\/(\d+)$/) && method === "GET") {
     const user = verifyToken(req, res);
     if (!user) {
@@ -92,6 +114,11 @@ const server = createServer(async (req, res) => {
     pathname.match(/^\/products\/(\d+)\/stock-history$/) &&
     method === "GET"
   ) {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+
     const productId = pathname.split("/")[2];
     productController.getProductHistoryById(productId, (err, history) => {
       if (err) {
@@ -150,16 +177,23 @@ const server = createServer(async (req, res) => {
     if (!user) {
       return;
     }
-    const id = pathname.split("/")[2];
-    productController.deleteProduct(id, (err, result) => {
-      if (err) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ message: "Error deleting product" }));
-      } else {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ message: `Product ${id} deleted` }));
-      }
-    });
+    try {
+      const id = pathname.split("/")[2];
+      productController.deleteProduct(id, (err, result) => {
+        if (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ message: "Error deleting product" }));
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ message: `Product ${id} deleted` }));
+        }
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ message: "Server error during product deletion" })
+      );
+    }
   } else if (pathname === "/register" && method === "POST") {
     try {
       let body = "";
@@ -201,6 +235,68 @@ const server = createServer(async (req, res) => {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ message: "Server error during registration" }));
     }
+  } else if (pathname === "/transactions" && method === "POST") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    try {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+      req.on("end", async () => {
+        const { product_id, quantity_change, reason, type, balance } =
+          JSON.parse(body);
+        if (!product_id || !quantity_change || !reason) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(
+            JSON.stringify({ message: "All fields are required" })
+          );
+        }
+
+        productController.createStockMovement(
+          { product_id, quantity_change, reason, type, balance },
+          (err, result) => {
+            if (err) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({ message: "Error processing transaction" })
+              );
+            } else {
+              res.writeHead(201, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(result));
+            }
+          }
+        );
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          message: "Server error processing this transaction",
+        })
+      );
+    }
+  } else if (pathname === "/stats" && method === "GET") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    try {
+      productController.getStats((err, stats) => {
+        if (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ message: "Error fetching stats" }));
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(stats));
+        }
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Error fetching stats" }));
+    }
   } else if (pathname === "/login" && method === "POST") {
     try {
       let body = "";
@@ -232,8 +328,7 @@ const server = createServer(async (req, res) => {
           // Generate JWT
           const token = jwt.sign(
             { id: user.id, email: user.email },
-            process.env.JWT_SECRET,
-            { expiresIn: "1h" }
+            process.env.JWT_SECRET
           );
 
           res.writeHead(200, { "Content-Type": "application/json" });
