@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import * as productController from "./productController.js";
 import * as userController from "./userController.js";
+import * as appController from "./appController.js";
 import url from "node:url";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -78,6 +79,30 @@ const server = createServer(async (req, res) => {
         res.end(JSON.stringify(filteredProducts));
       }
     });
+  } else if (pathname === "/appsettings" && method === "GET") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+
+    appController.getAppSettings((err, result) => {
+      if (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Error fetching app settings" }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      }
+    });
+    try {
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          message: "Server error during app settings retrieval",
+        })
+      );
+    }
   } else if (pathname === "/products/movements" && method === "GET") {
     const user = verifyToken(req, res);
     if (!user) {
@@ -120,15 +145,21 @@ const server = createServer(async (req, res) => {
     }
 
     const productId = pathname.split("/")[2];
-    productController.getProductHistoryById(productId, (err, history) => {
-      if (err) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ message: "Error fetching product history" }));
-      } else {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(history));
+    productController.getProductHistoryById(
+      productId,
+      "OUT",
+      (err, history) => {
+        if (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ message: "Error fetching product history" })
+          );
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(history));
+        }
       }
-    });
+    );
   } else if (pathname === "/products" && method === "POST") {
     const user = verifyToken(req, res);
     if (!user) {
@@ -139,17 +170,60 @@ const server = createServer(async (req, res) => {
       body += chunk.toString();
     });
     req.on("end", () => {
-      const productData = JSON.parse(body);
-      productController.createProduct(productData, (err, result) => {
-        if (err) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ message: "Error creating product" }));
-        } else {
-          res.writeHead(201, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ id: result.insertId, ...productData }));
-        }
-      });
+      try {
+        const productData = JSON.parse(body);
+        console.log("Received product data:", productData);
+
+        productController.createProduct(productData, (err, result) => {
+          if (err) {
+            console.error("Database error creating product:", err);
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                message: "Error creating product",
+                error: err.message,
+              })
+            );
+          } else {
+            console.log("Product created successfully:", result);
+            res.writeHead(201, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ id: result.insertId, ...productData }));
+          }
+        });
+      } catch (parseError) {
+        console.error("JSON parse error:", parseError);
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Invalid JSON data" }));
+      }
     });
+  } else if (pathname === "/categories" && method === "POST") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    try {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+      req.on("end", () => {
+        const categoryData = JSON.parse(body);
+        productController.createCategory(categoryData, (err, result) => {
+          if (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ message: "Error creating category" }));
+          } else {
+            res.writeHead(201, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ id: result.insertId, ...categoryData }));
+          }
+        });
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ message: "Server Error during category creation" })
+      );
+    }
   } else if (pathname.match(/^\/products\/(\d+)$/) && method === "PUT") {
     const user = verifyToken(req, res);
     if (!user) {
@@ -172,6 +246,121 @@ const server = createServer(async (req, res) => {
         }
       });
     });
+  } else if (pathname.match(/^\/appSettings\/(\d+)$/) && method === "PUT") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    try {
+      const id = pathname.split("/")[2];
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+      req.on("end", () => {
+        const settings = JSON.parse(body);
+        appController.updateAppSettings(settings, id, (err, result) => {
+          if (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ message: "Error updating app settings" }));
+          } else {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ message: `App settings updated` }));
+          }
+        });
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ message: "Server Error during app settings update" })
+      );
+    }
+  } else if (pathname.match(/^\/categories\/(\d+)$/) && method === "PUT") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    try {
+      const id = pathname.split("/")[2];
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+      req.on("end", () => {
+        const categoryData = JSON.parse(body);
+        productController.updateCategory(id, categoryData, (err, result) => {
+          if (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ message: "Error updating category" }));
+          } else {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ message: `Category ${id} updated` }));
+          }
+        });
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ message: "Server Error during category update" })
+      );
+    }
+  } else if (pathname === "/users/change-password" && method === "PUT") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    try {
+      const id = pathname.split("/")[2];
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+
+      req.on("end", () => {
+        const userData = JSON.parse(body);
+        const { currentPassword, newPassword } = userData;
+        const userId = user.id;
+
+        userController.getUserById(userId, async (err, user) => {
+          if (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ message: "Error fetching user" }));
+          }
+
+          const isMatch = await bcrypt.compare(currentPassword, user.password);
+
+          if (!isMatch) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            return res.end(
+              JSON.stringify({ message: "Incorrect current password" })
+            );
+          }
+
+          const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+          userController.changePassword(
+            userId,
+            hashedNewPassword,
+            (err, result) => {
+              if (err) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(
+                  JSON.stringify({ message: "Error during password change" })
+                );
+              }
+              res.end(
+                JSON.stringify({ message: "Password updated successfully" })
+              );
+            }
+          );
+        });
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ message: "Server error during password change" })
+      );
+    }
   } else if (pathname.match(/^\/products\/(\d+)$/) && method === "DELETE") {
     const user = verifyToken(req, res);
     if (!user) {
@@ -192,6 +381,28 @@ const server = createServer(async (req, res) => {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({ message: "Server error during product deletion" })
+      );
+    }
+  } else if (pathname.match(/^\/categories\/(\d+)$/) && method === "DELETE") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    try {
+      const id = pathname.split("/")[2];
+      productController.deleteCategory(id, (err, result) => {
+        if (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ message: "Error deleting category" }));
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ message: `Category ${id} deleted` }));
+        }
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ message: "Server error during category deletion" })
       );
     }
   } else if (pathname === "/register" && method === "POST") {
@@ -296,6 +507,25 @@ const server = createServer(async (req, res) => {
     } catch (error) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ message: "Error fetching stats" }));
+    }
+  } else if (pathname === "/categories" && method === "GET") {
+    const user = verifyToken(req, res);
+    if (!user) {
+      return;
+    }
+    try {
+      productController.getAllCategories((err, result) => {
+        if (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ message: "Error fetching categories" }));
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        }
+      });
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Error fetching categories" }));
     }
   } else if (pathname === "/login" && method === "POST") {
     try {
