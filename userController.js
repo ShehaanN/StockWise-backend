@@ -15,3 +15,18 @@ export const getUserByEmail = (email, callback) => {
     callback(err, result[0]);
   });
 };
+// GET user by id
+export const getUserById = (id, callback) => {
+  const sql = "SELECT * FROM users WHERE id = ?";
+  db.query(sql, [id], (err, result) => {
+    callback(err, result[0]);
+  });
+};
+
+// change password
+export const changePassword = (id, newpassword, callback) => {
+  const sql = "UPDATE users SET password = ? WHERE id = ?";
+  db.query(sql, [newpassword, id], (err, result) => {
+    callback(err, result);
+  });
+};
