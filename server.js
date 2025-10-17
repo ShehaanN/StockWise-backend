@@ -6,7 +6,16 @@ import url from "node:url";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import "dotenv/config";
+import db from "./db.js";
+import busboy from "busboy"; // The multipart form parser
+import { v2 as cloudinary } from "cloudinary";
 const PORT = process.env.PORT || 3000;
+
+cloudinary.config({
+  cloud_name: process.env.CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 // authentication for authorized users
 const verifyToken = (req, res) => {
@@ -165,35 +174,181 @@ const server = createServer(async (req, res) => {
     if (!user) {
       return;
     }
+
+    const contentType = req.headers["content-type"];
+
+    // Handle multipart form data (with file upload)
+    if (contentType && contentType.includes("multipart/form-data")) {
+      const bb = busboy({ headers: req.headers });
+
+      const fields = {};
+      let imageUrl = null;
+      let uploadPromise = null;
+
+      bb.on("field", (fieldname, val) => {
+        console.log(`Processing field ${fieldname}: ${val}`);
+        fields[fieldname] = val;
+      });
+
+      bb.on("file", (fieldname, file, info) => {
+        console.log(`Processing file ${info.filename}`);
+
+        uploadPromise = new Promise((resolve, reject) => {
+          // Set timeout for upload
+          const timeout = setTimeout(() => {
+            reject(new Error("Upload timeout after 30 seconds"));
+          }, 30000);
+
+          // Create a Cloudinary upload stream
+          const uploadStream = cloudinary.uploader.upload_stream(
+            {
+              folder: "inventory_products",
+              timeout: 30000,
+              resource_type: "auto",
+            },
+            (error, result) => {
+              clearTimeout(timeout);
+              if (error) {
+                console.error("Cloudinary Upload Error:", error);
+                return reject(
+                  new Error(`Cloudinary upload failed: ${error.message}`)
+                );
+              }
+              // When Cloudinary is done, resolve the promise with the URL
+              console.log("Upload successful:", result.secure_url);
+              resolve(result.secure_url);
+            }
+          );
+          file.pipe(uploadStream);
+        });
+      });
+
+      bb.on("finish", async () => {
+        console.log("Busboy finished parsing the form.");
+
+        try {
+          // If there was a file upload, wait for it to complete
+          if (uploadPromise) {
+            console.log("Waiting for file upload to complete...");
+            imageUrl = await uploadPromise;
+            console.log("File upload completed, imageUrl:", imageUrl);
+          }
+
+          // At this point, `fields` has all text data and `imageUrl` has the cloud URL.
+          // Now, we can perform the database insertion.
+          const { name, price, stock, category_id, description, barcode } =
+            fields;
+          if (!name || !price || !stock) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            return res.end(
+              JSON.stringify({
+                message: "Name, price, and stock are required.",
+              })
+            );
+          }
+
+          const sql =
+            "INSERT INTO products (name, price, stock, category_id, description, barcode, imageUrl) VALUES (?, ?, ?, ?, ?, ?, ?)";
+          db.query(
+            sql,
+            [
+              name,
+              price,
+              stock,
+              category_id || null,
+              description || null,
+              barcode || null,
+              imageUrl,
+            ],
+            (err, result) => {
+              if (err) {
+                console.error("Database Insert Error:", err);
+                res.writeHead(500, { "Content-Type": "application/json" });
+                return res.end(
+                  JSON.stringify({
+                    message: "Database error while adding product.",
+                  })
+                );
+              }
+              res.writeHead(201, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  message: "Product added successfully",
+                  productId: result.insertId,
+                  imageUrl,
+                })
+              );
+            }
+          );
+        } catch (error) {
+          console.error("Error in file upload process:", error);
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              message: `Upload failed: ${error.message}`,
+            })
+          );
+        }
+      });
+
+      // Pipe the request stream into busboy
+      req.pipe(bb);
+      return;
+    }
+
+    // Handle regular JSON requests (without file upload)
     let body = "";
     req.on("data", (chunk) => {
       body += chunk.toString();
     });
+
     req.on("end", () => {
       try {
-        const productData = JSON.parse(body);
-        console.log("Received product data:", productData);
+        const { name, price, stock, category_id, description, barcode } =
+          JSON.parse(body);
 
-        productController.createProduct(productData, (err, result) => {
-          if (err) {
-            console.error("Database error creating product:", err);
-            res.writeHead(500, { "Content-Type": "application/json" });
+        if (!name || !price || !stock) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(
+            JSON.stringify({ message: "Name, price, and stock are required." })
+          );
+        }
+
+        const sql =
+          "INSERT INTO products (name, price, stock, category_id, description, barcode) VALUES (?, ?, ?, ?, ?, ?)";
+        db.query(
+          sql,
+          [
+            name,
+            price,
+            stock,
+            category_id || null,
+            description || null,
+            barcode || null,
+          ],
+          (err, result) => {
+            if (err) {
+              console.error("Database Insert Error:", err);
+              res.writeHead(500, { "Content-Type": "application/json" });
+              return res.end(
+                JSON.stringify({
+                  message: "Database error while adding product.",
+                })
+              );
+            }
+            res.writeHead(201, { "Content-Type": "application/json" });
             res.end(
               JSON.stringify({
-                message: "Error creating product",
-                error: err.message,
+                message: "Product added successfully",
+                productId: result.insertId,
               })
             );
-          } else {
-            console.log("Product created successfully:", result);
-            res.writeHead(201, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ id: result.insertId, ...productData }));
           }
-        });
-      } catch (parseError) {
-        console.error("JSON parse error:", parseError);
+        );
+      } catch (error) {
+        console.error("JSON Parse Error:", error);
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ message: "Invalid JSON data" }));
+        res.end(JSON.stringify({ message: "Invalid JSON format." }));
       }
     });
   } else if (pathname === "/categories" && method === "POST") {
